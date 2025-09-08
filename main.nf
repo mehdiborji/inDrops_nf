@@ -48,13 +48,14 @@ if (!params.gtf_file) {
     error "Please provide --gtf_file parameter"
 }
 
-process PREPROCESS {
+process PREPROCESS_FASTQ {
     
     tag "$sample_id"
-    publishDir params.results_folder, mode: 'symlink'
+    publishDir params.results_folder, mode: 'move'
     
     input:
     tuple val(sample_id), path(read1), path(read2), path(read4)
+    val(limit)
     
     output:
     tuple val(sample_id), path("${sample_id}_R1.fastq"), path("${sample_id}_R2.fastq"), emit: reads
@@ -62,15 +63,15 @@ process PREPROCESS {
     
     script:
     """
-    preprocess.py \\
-        --sample_id ${sample_id} \\
-        --input_r1_fastq ${read1} \\
-        --input_r2_fastq ${read2} \\
-        --input_r4_fastq ${read4} \\
-        --output_r1_fastq ${sample_id}_R1.fastq \\
-        --output_r2_fastq ${sample_id}_R2.fastq \\
-        --bc_raw_count_json ${sample_id}_raw_bcs.json \\
-        --limit 2000000 \\
+    process_fastq.py \
+        --sample_id ${sample_id} \
+        --input_r1_fastq ${read1} \
+        --input_r2_fastq ${read2} \
+        --input_r4_fastq ${read4} \
+        --output_r1_fastq ${sample_id}_R1.fastq \
+        --output_r2_fastq ${sample_id}_R2.fastq \
+        --bc_raw_count_json ${sample_id}_raw_bcs.json \
+        --limit ${limit} \
         --log ${sample_id}_preprocessing.log
     """
 
@@ -79,26 +80,26 @@ process PREPROCESS {
 process FASTP {
     
     tag "$sample_id"
-    publishDir params.results_folder, mode: 'symlink'
+    publishDir params.results_folder, mode: 'move'
     
     input:
     tuple val(sample_id), path(read1), path(read2)
     
     output:
-    tuple val(sample_id), path("${sample_id}_trimmed_R1.fastq.gz"), path("${sample_id}_trimmed_R2.fastq.gz"), emit: reads
+    tuple val(sample_id), path("${sample_id}_trimmed_R1.fastq"), path("${sample_id}_trimmed_R2.fastq"), emit: reads
     path "${sample_id}_fastp.json", emit: json
     path "${sample_id}_fastp.html", emit: html
     
     script:
     """
-    fastp \\
-        --in1 ${read1} \\
+    fastp \
+        --in1 ${read1} \
         --in2 ${read2} \\
-        --out1 ${sample_id}_trimmed_R1.fastq.gz \\
-        --out2 ${sample_id}_trimmed_R2.fastq.gz \\
-        --json ${sample_id}_fastp.json \\
+        --out1 ${sample_id}_trimmed_R1.fastq \
+        --out2 ${sample_id}_trimmed_R2.fastq \\
+        --json ${sample_id}_fastp.json \
         --html ${sample_id}_fastp.html \\
-        --thread ${task.cpus} \\
+        --thread ${task.cpus} \
         --length_required 22 \\
         --detect_adapter_for_pe
     """
@@ -107,6 +108,8 @@ process FASTP {
 
 process STAR_INDEX {
     
+    container 'longread_nf'
+
     tag "STAR_INDEX"
     publishDir params.star_index_dir, mode: 'move'
     
@@ -115,7 +118,7 @@ process STAR_INDEX {
     path gtf_file
     
     output:
-    path "star_index", emit: index_dir
+    path ".", emit: index_dir
     
     when:
     // Only run if index directory doesn't exist or is empty
@@ -124,22 +127,80 @@ process STAR_INDEX {
 
     script:
     """
-    # Create the index directory
-    mkdir -p star_index
-    
-    STAR \\
+    STAR \
         --runMode genomeGenerate \\
-        --genomeDir star_index \\
+        --genomeDir . \\
         --genomeFastaFiles ${genome_fasta} \\
         --sjdbGTFfile ${gtf_file} \\
         --runThreadN ${task.cpus} \\
         --sjdbOverhang 60 \\
-        --genomeSAindexNbases 14 \\
-        ${args}
+        --genomeSAindexNbases 14
     """
 
 }
 
+process GET_WHITELIST {
+    
+    publishDir params.results_folder, mode: 'move'
+    
+    input:
+    path bc_list
+    
+    output:
+    path("output_whitelist"), emit: whitelist
+    
+    script:
+    """
+    process_plate_bcs.py \\
+        --gel_barcode2_list ${bc_list} \\
+        --output_whitelist output_whitelist
+    """
+
+}
+
+
+process STARSOLO_ALIGN {
+    
+    container 'longread_nf'
+
+    tag "STARSOLO_ALIGN_$sample_id"
+
+    publishDir params.results_folder, mode: 'move'
+    
+    input:
+    tuple val(sample_id), path(read1), path(read2)
+    path star_index_dir
+    path whitelist
+    
+    output:
+    tuple val(sample_id), path("${sample_id}/"), emit: results
+    tuple val(sample_id), path("${sample_id}/*Aligned.sortedByCoord.out.bam"), emit: bam
+    
+    script:
+
+    """
+    STAR \
+        --runThreadN ${task.cpus} \
+        --readFilesIn  ${read1} ${read2} \
+        --genomeDir ${star_index_dir} \
+        --outFileNamePrefix ${sample_id}/ \
+        --soloCBwhitelist ${whitelist} \
+        --soloType CB_UMI_Simple \
+        --soloCBstart 1 \
+        --soloCBlen 16 \
+        --soloUMIstart 17 \
+        --soloUMIlen 6 \
+        --soloFeatures Gene Velocyto GeneFull \
+        --soloUMIdedup Exact \
+        --soloMultiMappers EM \
+        --soloCellFilter None \
+        --outSAMtype BAM SortedByCoordinate \
+        --outSAMattributes AS CR UR CB UB GX GN \
+        --soloOutFormatFeaturesGeneField3 - \
+        --soloCellReadStats Standard
+    """
+    
+}
 
 workflow {
     // Create input channel from CSV
@@ -157,18 +218,24 @@ workflow {
     
     // Process 1: Python preprocessing
     // Takes tuple of 3 files, outputs 2 paired-end reads
-    PREPROCESS(input_ch)
+    PREPROCESS_FASTQ(input_ch, 2000000000)
 
     //PREPROCESS.out.reads.view()
     // Process 2: fastp quality control and trimming
     // Takes paired-end reads, outputs trimmed reads
-    FASTP(PREPROCESS.out.reads)
+    FASTP(PREPROCESS_FASTQ.out.reads)
 
     // Process 3: STAR index building (conditional)
     // Check if index exists, build if not available
-
-    
     STAR_INDEX(file(params.genome_fasta), file(params.gtf_file))
+
+    // Process 4: make 384*384 16bp whitelist from 384 8bp plate barcodes
+    GET_WHITELIST(file(params.whitelist_half))
+
+    // Process 5: STARsolo alignment and quantification
+    // Takes trimmed reads and STAR index, outputs alignment and count matrix
+    STARSOLO_ALIGN(FASTP.out.reads,file(params.star_index_dir),GET_WHITELIST.out.whitelist)
+
 }
 
 workflow.onComplete {

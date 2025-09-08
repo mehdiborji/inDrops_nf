@@ -83,7 +83,7 @@ def process_fastq(sample_id, input_r1_fastq, input_r2_fastq, input_r4_fastq,
                 if print_sample_reads:
                     logging.info("Failed reads \n")
             
-            if total_reads % 1000000 == 0:
+            if total_reads % 5000000 == 0:
                 logging.info(f"Processed {total_reads} reads")
             if limit and total_reads > limit:
                 break
