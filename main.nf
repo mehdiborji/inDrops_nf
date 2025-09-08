@@ -41,6 +41,12 @@ if (params.help) {
 if (!params.input_csv) {
     error "Please provide --input_csv parameter"
 }
+if (!params.genome_fasta) {
+    error "Please provide --genome_fasta parameter"
+}
+if (!params.gtf_file) {
+    error "Please provide --gtf_file parameter"
+}
 
 process PREPROCESS {
     
@@ -95,9 +101,43 @@ process FASTP {
         --thread ${task.cpus} \\
         --length_required 22 \\
         --detect_adapter_for_pe
-
-    rm ${read1} ${read2}
     """
+}
+
+
+process STAR_INDEX {
+    
+    tag "STAR_INDEX"
+    publishDir params.star_index_dir, mode: 'move'
+    
+    input:
+    path genome_fasta
+    path gtf_file
+    
+    output:
+    path "star_index", emit: index_dir
+    
+    when:
+    // Only run if index directory doesn't exist or is empty
+    def indexDir = file(params.star_index_dir)
+    !indexDir.exists() || indexDir.list().size() == 0
+
+    script:
+    """
+    # Create the index directory
+    mkdir -p star_index
+    
+    STAR \\
+        --runMode genomeGenerate \\
+        --genomeDir star_index \\
+        --genomeFastaFiles ${genome_fasta} \\
+        --sjdbGTFfile ${gtf_file} \\
+        --runThreadN ${task.cpus} \\
+        --sjdbOverhang 60 \\
+        --genomeSAindexNbases 14 \\
+        ${args}
+    """
+
 }
 
 
@@ -119,10 +159,16 @@ workflow {
     // Takes tuple of 3 files, outputs 2 paired-end reads
     PREPROCESS(input_ch)
 
-    PREPROCESS.out.reads.view()
+    //PREPROCESS.out.reads.view()
     // Process 2: fastp quality control and trimming
     // Takes paired-end reads, outputs trimmed reads
     FASTP(PREPROCESS.out.reads)
+
+    // Process 3: STAR index building (conditional)
+    // Check if index exists, build if not available
+
+    
+    STAR_INDEX(file(params.genome_fasta), file(params.gtf_file))
 }
 
 workflow.onComplete {
