@@ -11,10 +11,13 @@ nextflow.enable.dsl = 2
 def helpMessage() {
     log.info"""
     Usage:
-    nextflow run main.nf --input_csv samplesheet.csv --genome_fasta genome.fa --gtf_file genes.gtf [options]
+
+    nextflow run main.nf --input_csv samplesheet.csv --genome_fasta genome.fa --gtf_file genes.gtf -profile full
     
+    nextflow run main.nf -profile test
+
     Required arguments:
-    --input_csv         CSV file with sample information (ID,R1,R2,R3,R4)
+    --input_csv         CSV file with sample ID and input FASTQ files  (ID,R1,R2,R3,R4)
     --genome_fasta      Path to genome FASTA file
     --gtf_file          Path to GTF annotation file
 
@@ -38,10 +41,6 @@ if (!params.gtf_file) {
     error "Please provide --gtf_file parameter"
 }
 
-if (!params.whitelist_half) {
-    error "Please provide --whitelist_half parameter"
-}
-
 process PREPROCESS_FASTQ {
     
     tag "$sample_id"
@@ -49,7 +48,7 @@ process PREPROCESS_FASTQ {
     
     input:
     tuple val(sample_id), path(read1), path(read2), path(read4)
-    val(limit)
+    val read_limit
     
     output:
     tuple val(sample_id), path("${sample_id}_R1.fastq"), path("${sample_id}_R2.fastq"), emit: reads
@@ -65,7 +64,7 @@ process PREPROCESS_FASTQ {
         --output_r1_fastq ${sample_id}_R1.fastq \
         --output_r2_fastq ${sample_id}_R2.fastq \
         --bc_raw_count_json ${sample_id}_raw_bcs.json \
-        --limit ${limit} \
+        --limit ${read_limit} \
         --log ${sample_id}_preprocessing.log
     """
 
@@ -127,6 +126,7 @@ process STAR_INDEX {
     input:
     path genome_fasta
     path gtf_file
+    val indexN
     
     output:
     path "*", emit: index_dir
@@ -140,7 +140,7 @@ process STAR_INDEX {
         --sjdbGTFfile ${gtf_file} \\
         --runThreadN ${task.cpus} \\
         --sjdbOverhang 60 \\
-        --genomeSAindexNbases 6
+        --genomeSAindexNbases ${indexN}
     """
 
 }
@@ -159,7 +159,7 @@ process STARSOLO_ALIGN {
     
     output:
     tuple val(sample_id), path("${sample_id}/"), emit: results_folder
-    
+
     script:
 
     """
@@ -199,19 +199,14 @@ workflow {
             return [sample_id, read1, read2, read4]
         }
     
-    // Process 1: Python preprocessing
-    // Takes tuple of 3 files, outputs 2 paired-end reads
-    PREPROCESS_FASTQ(input_ch, 5000000)
+    // Process 1: Python preprocessing of 3 input files into one paired-end set
+    PREPROCESS_FASTQ(input_ch, params.read_limit)
 
-    PREPROCESS_FASTQ.out.reads.view()
     // Process 2: fastp quality control and trimming
-    // Takes paired-end reads, outputs trimmed reads
     FASTP(PREPROCESS_FASTQ.out.reads)
 
     // Process 3: STAR index building (conditional)
-    // Check if index exists, build if not available
-    STAR_INDEX(file(params.genome_fasta), file(params.gtf_file))
-    //STAR_INDEX(file(params.genome_fasta),file(params.gtf_file),params.star_index_dir)
+    STAR_INDEX(file(params.genome_fasta), file(params.gtf_file), params.indexN)
 
     // Process 4: make 384*384 16bp whitelist from 384 8bp plate barcodes
     GET_WHITELIST(file(params.whitelist_half))
