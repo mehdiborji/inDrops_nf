@@ -42,7 +42,6 @@ if (!params.input_csv) {
     error "Please provide --input_csv parameter"
 }
 
-
 process PREPROCESS {
     
     tag "$sample_id"
@@ -71,6 +70,37 @@ process PREPROCESS {
 
 }
 
+process FASTP {
+    
+    tag "$sample_id"
+    publishDir params.results_folder, mode: 'symlink'
+    
+    input:
+    tuple val(sample_id), path(read1), path(read2)
+    
+    output:
+    tuple val(sample_id), path("${sample_id}_trimmed_R1.fastq.gz"), path("${sample_id}_trimmed_R2.fastq.gz"), emit: reads
+    path "${sample_id}_fastp.json", emit: json
+    path "${sample_id}_fastp.html", emit: html
+    
+    script:
+    """
+    fastp \\
+        --in1 ${read1} \\
+        --in2 ${read2} \\
+        --out1 ${sample_id}_trimmed_R1.fastq.gz \\
+        --out2 ${sample_id}_trimmed_R2.fastq.gz \\
+        --json ${sample_id}_fastp.json \\
+        --html ${sample_id}_fastp.html \\
+        --thread ${task.cpus} \\
+        --length_required 22 \\
+        --detect_adapter_for_pe
+
+    rm ${read1} ${read2}
+    """
+}
+
+
 workflow {
     // Create input channel from CSV
     // Expected format: sample_id,read1,read2,read3
@@ -88,6 +118,11 @@ workflow {
     // Process 1: Python preprocessing
     // Takes tuple of 3 files, outputs 2 paired-end reads
     PREPROCESS(input_ch)
+
+    PREPROCESS.out.reads.view()
+    // Process 2: fastp quality control and trimming
+    // Takes paired-end reads, outputs trimmed reads
+    FASTP(PREPROCESS.out.reads)
 }
 
 workflow.onComplete {
