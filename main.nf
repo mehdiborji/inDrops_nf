@@ -14,20 +14,10 @@ def helpMessage() {
     nextflow run main.nf --input_csv samplesheet.csv --genome_fasta genome.fa --gtf_file genes.gtf [options]
     
     Required arguments:
-    --input_csv         CSV file with sample information (sample_id,file1,file2,file3)
+    --input_csv         CSV file with sample information (ID,R1,R2,R3,R4)
     --genome_fasta      Path to genome FASTA file
     --gtf_file          Path to GTF annotation file
-    
-    Optional arguments:
-    --star_index        Path to pre-built STAR index (if not provided, will be built)
-    --outdir            Output directory (default: results)
-    
-    Example:
-    nextflow run main.nf \\
-        --input_csv samplesheet.csv \\
-        --genome_fasta genome.fa \\
-        --gtf_file genes.gtf \\
-        --outdir results
+
     """.stripIndent()
 }
 
@@ -48,10 +38,14 @@ if (!params.gtf_file) {
     error "Please provide --gtf_file parameter"
 }
 
+if (!params.whitelist_half) {
+    error "Please provide --whitelist_half parameter"
+}
+
 process PREPROCESS_FASTQ {
     
     tag "$sample_id"
-    publishDir params.results_folder, mode: 'move'
+    publishDir params.results_folder, mode: 'symlink'
     
     input:
     tuple val(sample_id), path(read1), path(read2), path(read4)
@@ -80,7 +74,7 @@ process PREPROCESS_FASTQ {
 process FASTP {
     
     tag "$sample_id"
-    publishDir params.results_folder, mode: 'move'
+    publishDir params.results_folder, mode: 'symlink'
     
     input:
     tuple val(sample_id), path(read1), path(read2)
@@ -105,43 +99,9 @@ process FASTP {
     """
 }
 
-
-process STAR_INDEX {
-    
-    container 'longread_nf'
-
-    tag "STAR_INDEX"
-    publishDir params.star_index_dir, mode: 'move'
-    
-    input:
-    path genome_fasta
-    path gtf_file
-    
-    output:
-    path ".", emit: index_dir
-    
-    when:
-    // Only run if index directory doesn't exist or is empty
-    def indexDir = file(params.star_index_dir)
-    !indexDir.exists() || indexDir.list().size() == 0
-
-    script:
-    """
-    STAR \
-        --runMode genomeGenerate \\
-        --genomeDir . \\
-        --genomeFastaFiles ${genome_fasta} \\
-        --sjdbGTFfile ${gtf_file} \\
-        --runThreadN ${task.cpus} \\
-        --sjdbOverhang 60 \\
-        --genomeSAindexNbases 14
-    """
-
-}
-
 process GET_WHITELIST {
     
-    publishDir params.results_folder, mode: 'move'
+    publishDir params.results_folder, mode: 'symlink'
     
     input:
     path bc_list
@@ -159,13 +119,38 @@ process GET_WHITELIST {
 }
 
 
+process STAR_INDEX {
+    
+    tag "STAR_INDEX"
+    storeDir params.star_index_dir
+    
+    input:
+    path genome_fasta
+    path gtf_file
+    
+    output:
+    path "*", emit: index_dir
+    
+    script:
+    """
+    STAR \\
+        --runMode genomeGenerate \\
+        --genomeDir . \\
+        --genomeFastaFiles ${genome_fasta} \\
+        --sjdbGTFfile ${gtf_file} \\
+        --runThreadN ${task.cpus} \\
+        --sjdbOverhang 60 \\
+        --genomeSAindexNbases 6
+    """
+
+}
+
+
 process STARSOLO_ALIGN {
     
-    container 'longread_nf'
+    tag "$sample_id"
 
-    tag "STARSOLO_ALIGN_$sample_id"
-
-    publishDir params.results_folder, mode: 'move'
+    publishDir params.results_folder, mode: 'symlink'
     
     input:
     tuple val(sample_id), path(read1), path(read2)
@@ -173,8 +158,7 @@ process STARSOLO_ALIGN {
     path whitelist
     
     output:
-    tuple val(sample_id), path("${sample_id}/"), emit: results
-    tuple val(sample_id), path("${sample_id}/*Aligned.sortedByCoord.out.bam"), emit: bam
+    tuple val(sample_id), path("${sample_id}/"), emit: results_folder
     
     script:
 
@@ -194,8 +178,7 @@ process STARSOLO_ALIGN {
         --soloUMIdedup Exact \
         --soloMultiMappers EM \
         --soloCellFilter None \
-        --outSAMtype BAM SortedByCoordinate \
-        --outSAMattributes AS CR UR CB UB GX GN \
+        --outSAMtype None \
         --soloOutFormatFeaturesGeneField3 - \
         --soloCellReadStats Standard
     """
@@ -218,9 +201,9 @@ workflow {
     
     // Process 1: Python preprocessing
     // Takes tuple of 3 files, outputs 2 paired-end reads
-    PREPROCESS_FASTQ(input_ch, 2000000000)
+    PREPROCESS_FASTQ(input_ch, 5000000)
 
-    //PREPROCESS.out.reads.view()
+    PREPROCESS_FASTQ.out.reads.view()
     // Process 2: fastp quality control and trimming
     // Takes paired-end reads, outputs trimmed reads
     FASTP(PREPROCESS_FASTQ.out.reads)
@@ -228,6 +211,7 @@ workflow {
     // Process 3: STAR index building (conditional)
     // Check if index exists, build if not available
     STAR_INDEX(file(params.genome_fasta), file(params.gtf_file))
+    //STAR_INDEX(file(params.genome_fasta),file(params.gtf_file),params.star_index_dir)
 
     // Process 4: make 384*384 16bp whitelist from 384 8bp plate barcodes
     GET_WHITELIST(file(params.whitelist_half))
