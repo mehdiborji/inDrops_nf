@@ -63,7 +63,7 @@ def process_fastq(sample_id, input_r1_fastq, input_r2_fastq, input_r4_fastq,
                 accept_read = False
             
             new_seq2 = seq2 + seq4
-            new_qual2 = seq4 + qual4
+            new_qual2 = qual2 + qual4
             
             if accept_read:
     
