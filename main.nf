@@ -3,11 +3,13 @@
 nextflow.enable.dsl = 2
 
 // Import modules
-//include { PREPROCESS } from './modules/preprocess'
-//include { FASTP } from './modules/fastp'
-//include { STARSOLO } from './modules/starsolo'
+include { PREPROCESS_FASTQ } from './modules/fastq_processing'
+include { FASTP } from './modules/fastp_qc'
+include { STAR_INDEX } from './modules/genome_indexing'
+include { GET_INDROPS_V3_WHITELIST } from './modules/whitelist_generation'
+include { STARSOLO_ALIGN } from './modules/star_alignment'
 
-// Help message
+
 def helpMessage() {
     log.info"""
     Usage:
@@ -30,7 +32,6 @@ if (params.help) {
     exit 0
 }
 
-// Validate required parameters
 if (!params.input_csv) {
     error "Please provide --input_csv parameter"
 }
@@ -39,150 +40,6 @@ if (!params.genome_fasta) {
 }
 if (!params.gtf_file) {
     error "Please provide --gtf_file parameter"
-}
-
-process PREPROCESS_FASTQ {
-    
-    tag "$sample_id"
-    publishDir params.results_folder, mode: 'symlink'
-    
-    input:
-    tuple val(sample_id), path(read1), path(read2), path(read4)
-    val read_limit
-    
-    output:
-    tuple val(sample_id), path("${sample_id}_R1.fastq"), path("${sample_id}_R2.fastq"), emit: reads
-    path "${sample_id}_preprocessing.log", emit: log
-    
-    script:
-    """
-    process_fastq.py \
-        --sample_id ${sample_id} \
-        --input_r1_fastq ${read1} \
-        --input_r2_fastq ${read2} \
-        --input_r4_fastq ${read4} \
-        --output_r1_fastq ${sample_id}_R1.fastq \
-        --output_r2_fastq ${sample_id}_R2.fastq \
-        --bc_raw_count_json ${sample_id}_raw_bcs.json \
-        --limit ${read_limit} \
-        --log ${sample_id}_preprocessing.log
-    """
-
-}
-
-process FASTP {
-    
-    tag "$sample_id"
-    publishDir params.results_folder, mode: 'symlink'
-    
-    input:
-    tuple val(sample_id), path(read1), path(read2)
-    
-    output:
-    tuple val(sample_id), path("${sample_id}_trimmed_R1.fastq"), path("${sample_id}_trimmed_R2.fastq"), emit: reads
-    path "${sample_id}_fastp.json", emit: json
-    path "${sample_id}_fastp.html", emit: html
-    
-    script:
-    """
-    fastp \
-        --in1 ${read1} \
-        --in2 ${read2} \\
-        --out1 ${sample_id}_trimmed_R1.fastq \
-        --out2 ${sample_id}_trimmed_R2.fastq \\
-        --json ${sample_id}_fastp.json \
-        --html ${sample_id}_fastp.html \\
-        --thread ${task.cpus} \
-        --length_required 22 \\
-        --detect_adapter_for_pe
-    """
-}
-
-process GET_WHITELIST {
-    
-    publishDir params.results_folder, mode: 'symlink'
-    
-    input:
-    path bc_list
-    
-    output:
-    path("output_whitelist"), emit: whitelist
-    
-    script:
-    """
-    process_plate_bcs.py \\
-        --gel_barcode2_list ${bc_list} \\
-        --output_whitelist output_whitelist
-    """
-
-}
-
-
-process STAR_INDEX {
-    
-    tag "STAR_INDEX"
-    storeDir params.star_index_dir
-    
-    input:
-    path genome_fasta
-    path gtf_file
-    val indexN
-    
-    output:
-    path "*", emit: index_dir
-    
-    script:
-    """
-    STAR \\
-        --runMode genomeGenerate \\
-        --genomeDir . \\
-        --genomeFastaFiles ${genome_fasta} \\
-        --sjdbGTFfile ${gtf_file} \\
-        --runThreadN ${task.cpus} \\
-        --sjdbOverhang 60 \\
-        --genomeSAindexNbases ${indexN}
-    """
-
-}
-
-
-process STARSOLO_ALIGN {
-    
-    tag "$sample_id"
-
-    publishDir params.results_folder, mode: 'symlink'
-    
-    input:
-    tuple val(sample_id), path(read1), path(read2)
-    path star_index_dir
-    path whitelist
-    
-    output:
-    tuple val(sample_id), path("${sample_id}/"), emit: results_folder
-
-    script:
-
-    """
-    STAR \
-        --runThreadN ${task.cpus} \
-        --readFilesIn  ${read1} ${read2} \
-        --genomeDir ${star_index_dir} \
-        --outFileNamePrefix ${sample_id}/ \
-        --soloCBwhitelist ${whitelist} \
-        --soloType CB_UMI_Simple \
-        --soloCBstart 1 \
-        --soloCBlen 16 \
-        --soloUMIstart 17 \
-        --soloUMIlen 6 \
-        --soloFeatures Gene Velocyto GeneFull \
-        --soloUMIdedup Exact \
-        --soloMultiMappers EM \
-        --soloCellFilter None \
-        --outSAMtype None \
-        --soloOutFormatFeaturesGeneField3 - \
-        --soloCellReadStats Standard
-    """
-    
 }
 
 workflow {
@@ -205,15 +62,14 @@ workflow {
     // Process 2: fastp quality control and trimming
     FASTP(PREPROCESS_FASTQ.out.reads)
 
-    // Process 3: STAR index building (conditional)
+    // Process 3: STAR index building
     STAR_INDEX(file(params.genome_fasta), file(params.gtf_file), params.indexN)
 
-    // Process 4: make 384*384 16bp whitelist from 384 8bp plate barcodes
-    GET_WHITELIST(file(params.whitelist_half))
+    // Process 4: Making 384*384 16bp whitelist from 384 8bp plate barcodes
+    GET_INDROPS_V3_WHITELIST(file(params.whitelist_half))
 
     // Process 5: STARsolo alignment and quantification
-    // Takes trimmed reads and STAR index, outputs alignment and count matrix
-    STARSOLO_ALIGN(FASTP.out.reads,file(params.star_index_dir),GET_WHITELIST.out.whitelist)
+    STARSOLO_ALIGN(FASTP.out.reads,file(params.star_index_dir),GET_INDROPS_V3_WHITELIST.out.whitelist)
 
 }
 
