@@ -1,4 +1,3 @@
-
 /*
 QC Filtering and Adapter Trimming with FASTP
 Length 22 ensures R2 has 16nt for BC and 6nt for UMI

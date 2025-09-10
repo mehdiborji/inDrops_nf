@@ -1,3 +1,12 @@
+/*
+STAR aligner used with solo option for single-cell barcoded RNA-seq libraries
+cDNA read is should be first read and BC-UMI the second pair in a pair
+Count matrices are generated:
+Exonic reads (Gene)
+Exonic + Intronic reads (GeneFull)
+Spliced + Unspliced reads (Velocyto)
+*/
+
 
 process STARSOLO_ALIGN {
     
