@@ -2,7 +2,7 @@
 
 This pipeline only leverages a tacit knowledge about the library read structure of inDrops v3 assay provided in the function [`stable_barcode_names`](https://github.com/indrops/indrops/blob/master/indrops.py#L352-L381), where the inDrops v3 barcodes are defined.
 
-This pipeline is built around [`STARsolo`](https://github.com/alexdobin/STAR) for quantifying inDrops v3 single-cell libraries. The libraries consist of separate read files where `R1` is cDNA, `R2` is the 8 bp barcode, `R3` is the library index, and `R4` is the second barcode plus a 6 bp UMI. To use `STARsolo`, R2 and R4 are concatenated to create a new read. fastp is used for QC and adapter trimming.
+This pipeline is built around [`STARsolo`](https://github.com/alexdobin/STAR) for quantifying inDrops v3 single-cell libraries. The libraries consist of separate read files where `R1` is cDNA, `R2` is the 8 bp barcode, `R3` is the library index, and `R4` is the second barcode plus a 6 bp UMI. To use `STARsolo`, R2 and R4 are concatenated to create a new read. `fastp` is used for QC and adapter trimming.
 
 The input parameters to the pipeline are a genome `FASTA` file and an annotation `GTF` file, as well as a sample sheet in `CSV` format that contains one library per row and four additional columns with paths to R1–R4 for each library. A whitelist of 16 bp barcodes is provided as part of the input and is generated on the fly using the 384-well plate barcodes. Each barcode is corrected within one Hamming distance of this set.
 
