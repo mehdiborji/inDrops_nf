@@ -2,12 +2,22 @@
 
 This pipeline only leverages a tacit knowledge about the library read structure of inDrops v3 assay provided in the function [`stable_barcode_names`](https://github.com/indrops/indrops/blob/master/indrops.py#L352-L381), where the inDrops v3 barcodes are defined.
 
-This pipeline is built around [`STARsolo`](https://github.com/alexdobin/STAR) for quantifying inDrops v3 single-cell libraries. The libraries consist of separate read files where `R1` is cDNA, `R2` is the 8 bp barcode, `R3` is the library index, and `R4` is the second barcode plus a 6 bp UMI. To use `STARsolo`, R2 and R4 are concatenated to create a new read. `fastp` is used for QC and adapter trimming.
+This pipeline is built around [`STARsolo`](https://github.com/alexdobin/STAR) for quantifying inDrops v3 single-cell libraries.
 
-The input parameters to the pipeline are a genome `FASTA` file and an annotation `GTF` file, as well as a sample sheet in `CSV` format that contains one library per row and four additional columns with paths to R1–R4 for each library. A whitelist of 16 bp barcodes is provided as part of the input and is generated on the fly using the 384-well plate barcodes. Each barcode is corrected within one Hamming distance of this set.
+The libraries consist of four separate read files:
 
-The outputs are count matrices in different formats, including Gene (exonic reads), GeneFull (exonic + intronic reads), and Velocyto (spliced + unspliced reads).
+`R1`: cDNA
+`R2`: the first 8 bp of the cellular barcode, derived from a set of 384-well plate barcodes
+`R3`: the library index
+`R4`: the second 8 bp of the cellular barcode, derived from the reverse complement of the same set, followed by a 6 bp UMI
 
+The input parameters to the pipeline include a genome `FASTA` file, an annotation `GTF` file, and a sample sheet in `CSV` format. The sample sheet contains one library per row, with the first column specifying the library name and four additional columns providing the paths to R1–R4 for that library.
+
+To enable STARsolo, R2 and R4 are concatenated by iterating through all reads using [`pysam`](https://github.com/pysam-developers/pysam), generating a new read in the first step of the pipeline within the module `fastq_processing.nf`. Subsequently, [`fastp`](https://github.com/OpenGene/fastp) is used for quality control and adapter trimming.
+
+A whitelist of 16 bp barcodes is provided as input and is generated on the fly in the process `whitelist_generation.nf` using the 384-well plate barcode list `data/gel_barcode2_list.txt`. During `STARsolo` alignment, each barcode is corrected within one Hamming distance of this set.
+
+The pipeline stores the reference genome index and output files in corresponding directories within the user’s `$HOME` folder. The outputs include processed `FASTQ` files, QC log files, and a directory for each library containing `STAR` aligner results, including count matrices in multiple formats: `Gene` (exonic reads), `GeneFull` (exonic + intronic reads), and `Velocyto` (spliced + unspliced reads).
 
 ## Install Prerequisites
 
