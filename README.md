@@ -7,8 +7,11 @@ This pipeline is built around [`STARsolo`](https://github.com/alexdobin/STAR) fo
 The libraries consist of four separate read files:
 
 `R1`: cDNA
+
 `R2`: the first 8 bp of the cellular barcode, derived from a set of 384-well plate barcodes
+
 `R3`: the library index
+
 `R4`: the second 8 bp of the cellular barcode, derived from the reverse complement of the same set, followed by a 6 bp UMI
 
 The input parameters to the pipeline include a genome `FASTA` file, an annotation `GTF` file, and a sample sheet in `CSV` format. The sample sheet contains one library per row, with the first column specifying the library name and four additional columns providing the paths to R1–R4 for that library.
